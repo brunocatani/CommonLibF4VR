@@ -1,27 +1,25 @@
-# CommonLibF4 NG
+# CommonLib F4 VR
 
-This is a commonlibng version of CommonLibF4. NG comes from Skyrim Commonlib so multiple versions can use the same dll file (vs game specific dlls). This is currently for building flat (pre-ng and ng) and VR builds. Please note NG support is early stages. In fact, no F4/NG/VR specific structs/functions exist yet and need to be added.
+This is a VR split of CommonLibF4 from [alandtse/CommonLibF4](https://github.com/alandtse/CommonLibF4) as
+1. VR and pre-NG stopped getting updates.
+2. Almost all CommonLibF4 updates are in [libxse/commonlibf4](https://github.com/libxse/commonlibf4) that doesn't support VR.
+3. Multi-targetting while VR speciffic fixes is hard and not worth it at this point (IMHO).
+
 
 ## General Requirements
 
-### Build Dependencies
-
-- [Visual Studio Community 2022 16.10.0 Preview 3.0](https://visualstudio.microsoft.com/vs/preview/)
-  - Desktop development with C++
-
-### Development
-
+- [Visual Studio Community](https://visualstudio.microsoft.com/vs/preview/)
 - [clang-format 12.0.0](https://github.com/llvm/llvm-project/releases)
 - [CMake](https://cmake.org/)
 - [vcpkg](https://github.com/microsoft/vcpkg)
+
 
 ## F4SE Plugin Requirements
 
 ### End User Dependencies
 
-- [Address Library for F4SE Plugins](https://www.nexusmods.com/fallout4/mods/47327)
 - [VR Address Library for F4SEVR Plugins](https://www.nexusmods.com/fallout4/mods/64879)
-- [F4SE/VR](https://f4se.silverlock.org/)
+- [F4SEVR](https://f4se.silverlock.org/)
 
 ### Development
 
@@ -30,7 +28,8 @@ This is a commonlibng version of CommonLibF4. NG comes from Skyrim Commonlib so 
 
 ## Credits
 
-- Thanks to [Ryan McKenzie](https://github.com/Ryan-rsm-McKenzie) for original code
+- Thanks to [Ryan McKenzie](https://github.com/Ryan-rsm-McKenzie) for original code.
+- Thanks to [Alan Tse](https://github.com/alandtse) for the fork code.
 - Thanks to [CharmedBaryon](https://github.com/CharmedBaryon) for [NG code](https://github.com/CharmedBaryon/CommonLibSSE-NG) and initial porting to F4 by [alandtse](https://github.com/alandtse)
 - Thanks to maintainers of active forks:
   [po3](https://github.com/powerof3/CommonLibF4)
