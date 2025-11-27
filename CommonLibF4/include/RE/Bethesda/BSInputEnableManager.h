@@ -41,8 +41,7 @@ namespace RE
 		inline OTHER_EVENT_FLAG operator&(OTHER_EVENT_FLAG lhs, OTHER_EVENT_FLAG rhs)
 		{
 			using U = std::underlying_type_t<OTHER_EVENT_FLAG>;
-			return static_cast<OTHER_EVENT_FLAG>(static_cast<U>(lhs) & static_cast<U>(rhs)
-			);
+			return static_cast<OTHER_EVENT_FLAG>(static_cast<U>(lhs) & static_cast<U>(rhs));
 		}
 
 		inline OTHER_EVENT_FLAG operator~(OTHER_EVENT_FLAG value)

@@ -32,8 +32,7 @@ namespace RE
 		{
 			using U = std::underlying_type_t<USER_EVENT_FLAG>;
 			return static_cast<USER_EVENT_FLAG>(
-				static_cast<U>(lhs) & static_cast<U>(rhs)
-			);
+				static_cast<U>(lhs) & static_cast<U>(rhs));
 		}
 
 		inline USER_EVENT_FLAG operator~(USER_EVENT_FLAG value)
