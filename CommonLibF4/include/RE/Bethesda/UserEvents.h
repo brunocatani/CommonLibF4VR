@@ -22,6 +22,26 @@ namespace RE
 			kVATS = 1 << 11
 		};
 
+		inline USER_EVENT_FLAG operator|(USER_EVENT_FLAG lhs, USER_EVENT_FLAG rhs)
+		{
+			using U = std::underlying_type_t<USER_EVENT_FLAG>;
+			return static_cast<USER_EVENT_FLAG>(static_cast<U>(lhs) | static_cast<U>(rhs));
+		}
+
+		inline USER_EVENT_FLAG operator&(USER_EVENT_FLAG lhs, USER_EVENT_FLAG rhs)
+		{
+			using U = std::underlying_type_t<USER_EVENT_FLAG>;
+			return static_cast<USER_EVENT_FLAG>(
+				static_cast<U>(lhs) & static_cast<U>(rhs)
+			);
+		}
+
+		inline USER_EVENT_FLAG operator~(USER_EVENT_FLAG value)
+		{
+			using U = std::underlying_type_t<USER_EVENT_FLAG>;
+			return static_cast<USER_EVENT_FLAG>(~static_cast<U>(value));
+		}
+
 		enum class INPUT_CONTEXT_ID
 		{
 			kMainGameplay = 0,

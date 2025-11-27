@@ -31,6 +31,24 @@ namespace RE
 			kCursor = 1 << 9,
 			kSprinting = 1 << 10,
 		};
+
+		inline OTHER_EVENT_FLAG operator|(OTHER_EVENT_FLAG lhs, OTHER_EVENT_FLAG rhs)
+		{
+			using U = std::underlying_type_t<OTHER_EVENT_FLAG>;
+			return static_cast<OTHER_EVENT_FLAG>(static_cast<U>(lhs) | static_cast<U>(rhs));
+		}
+
+		inline OTHER_EVENT_FLAG operator&(OTHER_EVENT_FLAG lhs, OTHER_EVENT_FLAG rhs)
+		{
+			using U = std::underlying_type_t<OTHER_EVENT_FLAG>;
+			return static_cast<OTHER_EVENT_FLAG>(static_cast<U>(lhs) & static_cast<U>(rhs)
+			);
+		}
+
+		inline OTHER_EVENT_FLAG operator~(OTHER_EVENT_FLAG value)
+		{
+			return static_cast<OTHER_EVENT_FLAG>(~static_cast<std::underlying_type_t<OTHER_EVENT_FLAG>>(value));
+		}
 	}
 
 	using OEFlag = OtherInputEvents::OTHER_EVENT_FLAG;
@@ -102,6 +120,7 @@ namespace RE
 			return func(this, a_layerID, a_userEventFlags, a_enable, a_senderID);
 		}
 
+		// TODO: this doesn't seem to work in VR
 		bool EnableOtherEvent(std::uint32_t a_layerID, OEFlag a_otherEventFlags, bool a_enable, UserEvents::SENDER_ID a_senderID)
 		{
 			using func_t = decltype(&BSInputEnableManager::EnableOtherEvent);
@@ -109,6 +128,7 @@ namespace RE
 			return func(this, a_layerID, a_otherEventFlags, a_enable, a_senderID);
 		}
 
+		// TODO: in VR this affects the other input events instead!
 		void ForceUserEventEnabled(UEFlag a_userEventFlags, bool a_enable)
 		{
 			BSAutoLock locker(cacheLock);
@@ -126,6 +146,17 @@ namespace RE
 				forceOtherInputEventsFlags.set(a_otherEventFlags);
 			} else {
 				forceOtherInputEventsFlags.reset(a_otherEventFlags);
+			}
+		}
+
+		// TODO: in VR this is actually updates the other input events flags and "ForceOtherEventEnabled" doesn't do anything, probably wrong alignment
+		void ForceOtherEventEnabledVR(OEFlag a_otherEventFlags, bool a_enable)
+		{
+			BSAutoLock locker(cacheLock);
+			if (a_enable) {
+				forceEnableInputUserEventsFlags.set(static_cast<UEFlag>(a_otherEventFlags));
+			} else {
+				forceEnableInputUserEventsFlags.reset(static_cast<UEFlag>(a_otherEventFlags));
 			}
 		}
 
