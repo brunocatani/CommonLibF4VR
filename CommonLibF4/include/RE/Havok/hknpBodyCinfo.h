@@ -53,9 +53,9 @@ namespace RE
 		std::uint32_t              collisionFilterInfo;   // 14
 		std::uint32_t              pad18;                 // 18
 		std::uint32_t              pad1C;                 // 1C
-		hkTransformf              transform;              // 20
-		std::uintptr_t             userData;              // 50
-		std::uint64_t              pad58;                 // 58
+		hkTransformf              transform;              // 20 - 0x40 bytes (NiMatrix3 + NiPoint4)
+		std::uintptr_t             userData;              // 60
+		std::uint64_t              pad68;                 // 68
 	};
-	static_assert(sizeof(hknpBodyCinfo) == 0x60);
+	static_assert(sizeof(hknpBodyCinfo) == 0x70);
 }
