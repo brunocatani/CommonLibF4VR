@@ -5,6 +5,7 @@
 #include "RE/Havok/hknpBodyCinfo.h"
 #include "RE/Havok/hknpCollisionResult.h"
 #include "RE/Havok/hknpMaterialId.h"
+#include "RE/Bethesda/bhkCharacterController.h"
 
 namespace RE
 {

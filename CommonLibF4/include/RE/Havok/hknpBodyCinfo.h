@@ -5,7 +5,6 @@
 #include "RE/Havok/hknpBodyId.h"
 #include "RE/Havok/hknpMaterialId.h"
 #include "RE/Havok/hknpShape.h"
-#include "RE/Bethesda/bhkCharacterController.h"
 
 namespace RE
 {
@@ -44,18 +43,24 @@ namespace RE
 			func(this);
 		}
 
+		// Layout verified via Ghidra decompilation of constructor (VR 0x141561dd0)
+		// and crash analysis confirming name at +0x20, shape hkRefPtr at +0x58.
 		// members
-		hkRefPtr<const hknpShape>  shape;                // 00
-		hknpBodyId                 bodyId;                // 08 - 0x7FFFFFFF = auto-assign
-		hknpMotionId               motionId;              // 0C - 0x7FFFFFFF = auto-assign
-		hknpMotionPropertiesId_Handle motionPropertiesId; // 10 - 0xFF = default -> DYNAMIC
-		hknpMaterialId             materialId;            // 12
-		std::uint32_t              collisionFilterInfo;   // 14
-		std::uint32_t              pad18;                 // 18
-		std::uint32_t              pad1C;                 // 1C
-		hkTransformf              transform;              // 20 - 0x40 bytes (NiMatrix3 + NiPoint4)
-		std::uintptr_t             userData;              // 60
-		std::uint64_t              pad68;                 // 68
+		std::uint64_t              reserved00;             // 00 - set to 0 by constructor
+		hknpBodyId                 bodyId;                 // 08 - 0x7FFFFFFF = auto-assign
+		hknpMotionId               motionId;               // 0C - 0x7FFFFFFF = auto-assign
+		hknpMotionPropertiesId_Handle motionPropertiesId;  // 10 - 0xFF = default -> DYNAMIC
+		hknpMaterialId             materialId;             // 12
+		std::uint32_t              collisionFilterInfo;    // 14
+		std::uint32_t              pad18;                  // 18
+		std::uint32_t              collisionLookAheadDistance; // 1C
+		const char*                name;                   // 20 - body name string (for debugging)
+		std::uintptr_t             userData;               // 28
+		hkVector4f                 position;               // 30 - world-space position
+		hkVector4f                 orientation;             // 40 - quaternion {x,y,z,w}, identity = {0,0,0,1}
+		std::uint8_t               qualityId;              // 50
+		std::uint8_t               pad51[7];               // 51
+		hkRefPtr<const hknpShape>  shape;                  // 58
 	};
-	static_assert(sizeof(hknpBodyCinfo) == 0x70);
+	static_assert(sizeof(hknpBodyCinfo) == 0x60);
 }
