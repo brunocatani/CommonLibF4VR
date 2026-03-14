@@ -9,22 +9,26 @@
 
 namespace RE
 {
+	struct hknpMotionIdDiscriminant;
+	struct hknpMotionPropertiesIdDiscriminant;
+	struct hknpBodyQualityIdDiscriminant;
+
 	struct hknpMotionId :
-		public hkHandle<std::uint32_t, 0x7FFF'FFFF>
+		public hkHandle<std::uint32_t, 0x7FFF'FFFF, hknpMotionIdDiscriminant>
 	{
 	public:
 	};
 	static_assert(sizeof(hknpMotionId) == 0x4);
 
 	struct hknpMotionPropertiesId_Handle :
-		public hkHandle<std::uint16_t, 0xFF>
+		public hkHandle<std::uint16_t, 0xFF, hknpMotionPropertiesIdDiscriminant>
 	{
 	public:
 	};
 	static_assert(sizeof(hknpMotionPropertiesId_Handle) == 0x2);
 
 	struct hknpBodyQualityId :
-		public hkHandle<std::uint8_t, 0xFF>
+		public hkHandle<std::uint8_t, 0xFF, hknpBodyQualityIdDiscriminant>
 	{
 	public:
 	};

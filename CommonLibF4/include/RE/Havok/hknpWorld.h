@@ -263,7 +263,7 @@ namespace RE
 		{
 			typedef void* func_t(hknpWorld*, std::int32_t, std::uint32_t);
 			static REL::Relocation<func_t> func{ REL::ID(497909) };
-			return func(this, static_cast<std::int32_t>(a_eventType), a_bodyId.GetValue());
+			return func(this, static_cast<std::int32_t>(a_eventType), a_bodyId.value);
 		}
 
 		// Simulation
