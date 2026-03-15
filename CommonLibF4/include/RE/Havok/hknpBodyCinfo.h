@@ -44,11 +44,11 @@ namespace RE
 		}
 
 		// Layout verified via Ghidra decompilation of constructor (VR 0x141561dd0)
-		// and crash analysis confirming name at +0x20, shape hkRefPtr at +0x58.
+		// and initFromCinfo (VR 0x1415616f0) which reads shape from offset 0x00.
 		// members
-		std::uint64_t              reserved00;             // 00 - set to 0 by constructor
+		const hknpShape*           shape;                  // 00 - raw pointer, initFromCinfo reads *cinfo for body shape
 		hknpBodyId                 bodyId;                 // 08 - 0x7FFFFFFF = auto-assign
-		hknpMotionId               motionId;               // 0C - 0x7FFFFFFF = auto-assign
+		hknpMotionId               motionId;               // 0C - 0 = static, else direct motion array index
 		hknpMotionPropertiesId_Handle motionPropertiesId;  // 10 - 0xFF = default -> DYNAMIC
 		hknpMaterialId             materialId;             // 12
 		std::uint32_t              collisionFilterInfo;    // 14
@@ -60,7 +60,7 @@ namespace RE
 		hkVector4f                 orientation;             // 40 - quaternion {x,y,z,w}, identity = {0,0,0,1}
 		std::uint8_t               qualityId;              // 50
 		std::uint8_t               pad51[7];               // 51
-		hkRefPtr<const hknpShape>  shape;                  // 58
+		std::uint64_t              reserved58;             // 58 - refcounted by constructor/destructor, don't touch
 	};
 	static_assert(sizeof(hknpBodyCinfo) == 0x60);
 }

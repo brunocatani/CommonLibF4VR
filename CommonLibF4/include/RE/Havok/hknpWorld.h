@@ -91,6 +91,27 @@ namespace RE
 			return func(this, a_query, a_collector);
 		}
 
+		// Motion Allocation
+		// Allocates a motion slot from the world's motion manager and initializes it
+		// with default properties. Must be called before CreateBody for non-static bodies.
+		// VR: FUN_141546350 (motion allocator), FUN_1417a2fc0 (motion cinfo ctor)
+		std::uint32_t AllocateMotion()
+		{
+			// Construct default motion creation info (0x70 bytes)
+			alignas(16) std::uint8_t motionCinfo[0x70];
+			typedef void* motionCinfoCtor_t(void*);
+			static REL::Relocation<motionCinfoCtor_t> motionCinfoCtor{ REL::Offset(0x17A2FC0) };
+			motionCinfoCtor(motionCinfo);
+
+			// Allocate and initialize motion from the world's motion manager
+			std::int32_t motionId = 0;
+			typedef std::int32_t* allocMotion_t(hknpWorld*, std::int32_t*, void*);
+			static REL::Relocation<allocMotion_t> allocMotion{ REL::Offset(0x1546350) };
+			allocMotion(this, &motionId, motionCinfo);
+
+			return static_cast<std::uint32_t>(motionId);
+		}
+
 		// Body Management
 		hknpBodyId CreateBody(hknpBodyCinfo& a_cinfo, std::int32_t a_additionMode = 1, std::uint8_t a_flags = 0)
 		{
