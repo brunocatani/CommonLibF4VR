@@ -1,10 +1,50 @@
 #pragma once
 
+// hknpWorld — Havok 2014 New Physics world (core simulation container)
+//
+// This is the central physics simulation object in Fallout 4 / FO4VR.
+// It owns all bodies, motions, constraints, and event dispatchers.
+// Bethesda wraps it in bhkWorld (BSHavok.h), but many operations require
+// direct access to the underlying hknpWorld.
+//
+// Thread safety:
+//   The world has a read/write lock at offset +0x690. Bethesda code acquires
+//   read locks before queries and write locks before mutations. For raycasts
+//   via bhkWorld::PickObject, the lock is taken internally. For direct
+//   hknpWorld calls, you may need to handle locking yourself.
+//
+//   CRASH WARNING: bhkPickData::PickObject will crash without the world
+//   read lock held. Use bhkWorld::PickObject instead (handles locking).
+//
+// Getting an hknpWorld pointer:
+//   // Via bhkWorld (Bethesda wrapper):
+//   RE::bhkWorld* bhk = cell->GetbhkWorld();
+//   RE::hknpWorld* world = HavokUtils::GetHknpWorld(bhk);  // bhkWorld+0x60
+//
+// Coordinate space:
+//   All hknpWorld operations use Havok space (1 unit ≈ 70 game units).
+//   Convert with HavokUtils::kHavokScale (1.0f / 70.0f).
+//
+// Memory layout (key offsets from 'this'):
+//   +0x20  = hknpBody*  body array (stride 0x90, indexed by hknpBodyId::value)
+//   +0xE0  = void*      motion array (stride 0x80, indexed by hknpBody::motionIndex)
+//   +0x128 = void*      constraint array (stride 0x38)
+//   +0x178 = void*      collision query dispatcher
+//   +0x5C8 = void*      simulation island manager
+//   +0x648 = void*      event dispatcher (hknpEventDispatcher*)
+//   +0x690 = void*      read/write lock (critical section)
+//
+// All REL::IDs verified against fo4_database.csv for Fallout 4 VR.
+// Ghidra RE on Fallout4VR.exe.unpacked.exe.
+
 #include "RE/Havok/hkVector4.h"
+#include "RE/Havok/hknpBody.h"
 #include "RE/Havok/hknpBodyId.h"
 #include "RE/Havok/hknpBodyCinfo.h"
 #include "RE/Havok/hknpCollisionResult.h"
+#include "RE/Havok/hknpConstraintCinfo.h"
 #include "RE/Havok/hknpMaterialId.h"
+#include "RE/Havok/hknpMotion.h"
 #include "RE/Bethesda/bhkCharacterController.h"
 
 namespace RE
@@ -12,35 +52,58 @@ namespace RE
 	class hknpBody;
 	class hknpCollisionQueryCollector;
 	class hknpShape;
-	struct hknpConstraintId;
-	struct hknpConstraintCinfo;
 
 	struct hknpWorldCinfo;
 
+	/// hknpStepInput — parameters for a single physics step.
+	/// TODO: RE internal fields (currently padded to 0x20 bytes).
 	struct hknpStepInput
 	{
 	public:
 		// members
-		std::byte pad[0x20];  // TODO
+		std::byte pad[0x20];  // TODO: deltaTime, gravity, solverIterations, etc.
 	};
 
+	/// hknpEventType — event type enum for the world's event dispatcher.
+	///
+	/// Subscribe to events via hknpWorld::GetEventSignal(eventType).
+	/// Contact events (kContact = 3) are the most commonly used — they fire
+	/// when bodies collide and are used by FOCollisionListener for gameplay.
 	struct hknpEventType
 	{
 	public:
 		enum Enum
 		{
-			kContact = 3,
-			kIslandActivation = 0xB,
-			kBroadPhaseExit = 0xC,
-			kBreakableConstraintForceExceeded = 0x16
+			kContact = 3,                          ///< Contact/collision events (FOCollisionListener uses this)
+			kIslandActivation = 0xB,               ///< Simulation island activated/deactivated
+			kBroadPhaseExit = 0xC,                 ///< Body left the broadphase region
+			kBreakableConstraintForceExceeded = 0x16  ///< Breakable constraint exceeded its force threshold
 		};
 	};
 	static_assert(std::is_empty_v<hknpEventType>);
 
+	/// hknpWorld — the main Havok physics simulation world.
+	///
+	/// Typical cell statistics (confirmed in FO4VR):
+	///   ~2047 bodies total (~1566 static, ~479 dynamic, 0-2 keyframed)
+	///   Body IDs are indices into the body array (0 to ~2047)
+	///   Motion index 0 is the shared static motion
+	///
+	/// Body lifecycle:
+	///   1. AllocateMotion()     — get a motion slot (skip for static bodies)
+	///   2. hknpBodyCinfo setup  — set shape, motionId, motionPropertiesId, etc.
+	///   3. CreateBody(cinfo)    — creates body and adds to world
+	///   4. ... use body ...
+	///   5. RemoveBodies()       — remove from simulation
+	///   6. DestroyBodies()      — free body and motion slots
 	class hknpWorld
 	{
 	public:
-		// Construction
+		// =====================================================================
+		// Construction / Configuration
+		// =====================================================================
+
+		/// Construct a new physics world with the given configuration.
 		hknpWorld(hknpWorldCinfo& a_cinfo)
 		{
 			typedef hknpWorld* func_t(hknpWorld*, hknpWorldCinfo&);
@@ -48,6 +111,7 @@ namespace RE
 			func(this, a_cinfo);
 		}
 
+		/// Destroy the world and all contained bodies/constraints.
 		~hknpWorld()
 		{
 			typedef void func_t(hknpWorld*);
@@ -55,6 +119,7 @@ namespace RE
 			func(this);
 		}
 
+		/// Get the current world configuration (inverse of constructor).
 		void GetCinfo(hknpWorldCinfo& a_cinfo)
 		{
 			using func_t = decltype(&hknpWorld::GetCinfo);
@@ -62,7 +127,22 @@ namespace RE
 			return func(this, a_cinfo);
 		}
 
+		// =====================================================================
 		// Collision Queries
+		//
+		// These query the broadphase + narrowphase for collisions.
+		// Results are collected into hknpCollisionQueryCollector instances.
+		// Use hknpClosestHitCollector for single closest hit, or
+		// hknpAllHitsCollector for all intersecting bodies.
+		// =====================================================================
+
+		/// Cast a ray through the world, collecting hits into the collector.
+		///
+		/// @param a_query     Raycast query struct (start point, direction, max distance)
+		/// @param a_collector Receives hit results (use hknpClosestHitCollector or hknpAllHitsCollector)
+		///
+		/// Note: For most gameplay raycasts, prefer bhkWorld::PickObject() which handles
+		/// world locking and returns bhkPickData with NiAVObject resolution.
 		void CastRay(void* a_query, hknpCollisionQueryCollector* a_collector)
 		{
 			using func_t = decltype(&hknpWorld::CastRay);
@@ -70,6 +150,13 @@ namespace RE
 			return func(this, a_query, a_collector);
 		}
 
+		/// Sweep a shape through the world (linear cast / shape cast).
+		/// This is the Havok 2014 equivalent of "linearCast" from older Havok versions.
+		///
+		/// @param a_query              Shape cast query (shape + path)
+		/// @param a_queryShapeInfo     Shape info for the query shape
+		/// @param a_collector          Receives hit results
+		/// @param a_startPointCollector Optional: collects hits at the start position (can be nullptr)
 		void CastShape(void* a_query, void* a_queryShapeInfo, hknpCollisionQueryCollector* a_collector, hknpCollisionQueryCollector* a_startPointCollector)
 		{
 			using func_t = decltype(&hknpWorld::CastShape);
@@ -77,6 +164,11 @@ namespace RE
 			return func(this, a_query, a_queryShapeInfo, a_collector, a_startPointCollector);
 		}
 
+		/// Find the closest points between a shape and the world geometry.
+		///
+		/// @param a_query     Point query struct
+		/// @param a_transform Transform for the query shape
+		/// @param a_collector Receives closest point results
 		void GetClosestPoints(void* a_query, hkTransformf& a_transform, hknpCollisionQueryCollector* a_collector)
 		{
 			using func_t = decltype(&hknpWorld::GetClosestPoints);
@@ -84,6 +176,11 @@ namespace RE
 			return func(this, a_query, a_transform, a_collector);
 		}
 
+		/// Query all bodies whose AABBs overlap the given AABB.
+		/// Fast broadphase-only query — no narrowphase collision test.
+		///
+		/// @param a_query     AABB query (min/max bounds)
+		/// @param a_collector Receives overlapping body IDs
 		void QueryAabb(void* a_query, hknpCollisionQueryCollector* a_collector)
 		{
 			using func_t = decltype(&hknpWorld::QueryAabb);
@@ -91,10 +188,30 @@ namespace RE
 			return func(this, a_query, a_collector);
 		}
 
+		// =====================================================================
 		// Motion Allocation
-		// Allocates a motion slot from the world's motion manager and initializes it
-		// with default properties. Must be called before CreateBody for non-static bodies.
-		// VR: FUN_141546350 (motion allocator), FUN_1417a2fc0 (motion cinfo ctor)
+		//
+		// Motions are separate from bodies and must be allocated before creating
+		// non-static bodies. Static bodies use the shared motion at index 0.
+		// =====================================================================
+
+		/// Allocate a motion slot from the world's motion free list.
+		///
+		/// MUST be called before CreateBody() for any non-static body.
+		/// Static bodies should NOT call this — they use the shared motion at index 0.
+		///
+		/// The returned motionId goes into hknpBodyCinfo::motionId.
+		///
+		/// VR addresses: FUN_141546350 (motion allocator), FUN_1417a2fc0 (motion cinfo ctor)
+		///
+		/// @return Allocated motion index to set in hknpBodyCinfo::motionId.
+		///
+		/// Example:
+		///   RE::hknpBodyCinfo cinfo;
+		///   cinfo.shape = myShape;
+		///   cinfo.motionId = { world->AllocateMotion() };  // allocate motion first!
+		///   cinfo.motionPropertiesId = { 2 };  // KEYFRAMED
+		///   auto bodyId = world->CreateBody(cinfo);
 		std::uint32_t AllocateMotion()
 		{
 			// Construct default motion creation info (0x70 bytes)
@@ -112,7 +229,32 @@ namespace RE
 			return static_cast<std::uint32_t>(motionId);
 		}
 
+		// =====================================================================
 		// Body Management
+		//
+		// Bodies are created from hknpBodyCinfo and identified by hknpBodyId.
+		// Remember: allocate a motion FIRST for non-static bodies.
+		// =====================================================================
+
+		/// Create a new body in the world.
+		///
+		/// @param a_cinfo         Body creation info (shape, motion, position, etc.)
+		/// @param a_additionMode  0 = deferred (call CommitAddBodies later), 1 = immediate (default)
+		/// @param a_flags         Creation flags (0 = default)
+		/// @return The new body's ID (use to reference the body in all other methods)
+		///
+		/// IMPORTANT: For non-static bodies, you MUST call AllocateMotion() first
+		/// and set cinfo.motionId to the returned value. Without this, the body will
+		/// have no motion slot and behavior is undefined.
+		///
+		/// Example:
+		///   RE::hknpBodyCinfo cinfo;
+		///   cinfo.shape = capsule;
+		///   cinfo.motionId = { world->AllocateMotion() };
+		///   cinfo.motionPropertiesId = { 2 };  // KEYFRAMED
+		///   cinfo.position = { x, y, z, 0 };   // Havok space
+		///   cinfo.userData = 0;                  // MUST be 0 or valid pointer
+		///   auto bodyId = world->CreateBody(cinfo);
 		hknpBodyId CreateBody(hknpBodyCinfo& a_cinfo, std::int32_t a_additionMode = 1, std::uint8_t a_flags = 0)
 		{
 			typedef hknpBodyId* func_t(hknpWorld*, hknpBodyId*, hknpBodyCinfo&, std::int32_t, std::uint8_t);
@@ -122,6 +264,12 @@ namespace RE
 			return bodyId;
 		}
 
+		/// Remove bodies from the simulation (but don't free their slots).
+		/// Use DestroyBodies() to fully release body and motion slots.
+		///
+		/// @param a_bodyIds        Array of body IDs to remove
+		/// @param a_count          Number of IDs in the array
+		/// @param a_activationMode 0 = default activation behavior
 		void RemoveBodies(hknpBodyId* a_bodyIds, std::int32_t a_count, std::int32_t a_activationMode = 0)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId*, std::int32_t, std::int32_t);
@@ -129,6 +277,12 @@ namespace RE
 			func(this, a_bodyIds, a_count, a_activationMode);
 		}
 
+		/// Destroy bodies: remove from simulation AND free body+motion slots.
+		/// After this call, the body IDs are invalid and may be reused.
+		///
+		/// @param a_bodyIds        Array of body IDs to destroy
+		/// @param a_count          Number of IDs in the array
+		/// @param a_activationMode 0 = default activation behavior
 		void DestroyBodies(hknpBodyId* a_bodyIds, std::int32_t a_count, std::int32_t a_activationMode = 0)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId*, std::int32_t, std::int32_t);
@@ -136,6 +290,8 @@ namespace RE
 			func(this, a_bodyIds, a_count, a_activationMode);
 		}
 
+		/// Flush deferred body additions (when CreateBody was called with additionMode=0).
+		/// Only needed if you batch-create bodies with deferred mode.
 		void CommitAddBodies()
 		{
 			using func_t = decltype(&hknpWorld::CommitAddBodies);
@@ -143,7 +299,22 @@ namespace RE
 			return func(this);
 		}
 
+		// =====================================================================
 		// Body Properties
+		//
+		// Modify body state after creation. All positions/transforms are in
+		// Havok space (1 unit ≈ 70 game units).
+		// =====================================================================
+
+		/// Set a body's world transform (position + rotation).
+		///
+		/// WARNING: For keyframed/grabbed objects, using SetBodyTransform every frame
+		/// fights the Havok solver and causes visible stutter. Use velocity-driven
+		/// movement instead (ComputeHardKeyFrame + SetBodyVelocity).
+		///
+		/// @param a_bodyId              Target body
+		/// @param a_transform           New world transform (Havok space)
+		/// @param a_activationBehavior  0 = auto-activate if sleeping
 		void SetBodyTransform(hknpBodyId a_bodyId, hkTransformf& a_transform, std::int32_t a_activationBehavior = 0)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, hkTransformf&, std::int32_t);
@@ -151,6 +322,7 @@ namespace RE
 			func(this, a_bodyId, a_transform, a_activationBehavior);
 		}
 
+		/// Replace a body's collision shape.
 		void SetBodyShape(hknpBodyId a_bodyId, const hknpShape* a_shape)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, const hknpShape*);
@@ -158,6 +330,9 @@ namespace RE
 			func(this, a_bodyId, a_shape);
 		}
 
+		/// Change a body's physics material (affects friction, restitution, etc.).
+		///
+		/// @param a_rebuildCachesMode 0 = rebuild collision caches immediately
 		void SetBodyMaterial(hknpBodyId a_bodyId, hknpMaterialId a_materialId, std::int32_t a_rebuildCachesMode = 0)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, hknpMaterialId, std::int32_t);
@@ -165,6 +340,19 @@ namespace RE
 			func(this, a_bodyId, a_materialId, a_rebuildCachesMode);
 		}
 
+		/// Switch a body's motion type at runtime.
+		/// This is how you toggle between DYNAMIC, KEYFRAMED, and STATIC.
+		///
+		/// Common use: grab an object by switching it to KEYFRAMED,
+		/// then switch back to DYNAMIC on release for throw physics.
+		///
+		/// @param a_motionPropertiesId  Preset: {0}=STATIC, {1}=DYNAMIC, {2}=KEYFRAMED
+		///
+		/// Example:
+		///   // Grab: switch to keyframed
+		///   world->SetBodyMotionProperties(bodyId, { 2 });  // KEYFRAMED
+		///   // Release: switch back to dynamic for throw
+		///   world->SetBodyMotionProperties(bodyId, { 1 });  // DYNAMIC
 		void SetBodyMotionProperties(hknpBodyId a_bodyId, hknpMotionPropertiesId_Handle a_motionPropertiesId)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, hknpMotionPropertiesId_Handle);
@@ -172,6 +360,8 @@ namespace RE
 			func(this, a_bodyId, a_motionPropertiesId);
 		}
 
+		/// Get a body's axis-aligned bounding box.
+		/// Output is 32 bytes: 16 bytes min (hkVector4f), 16 bytes max (hkVector4f).
 		void GetBodyAabb(hknpBodyId a_bodyId, void* a_aabbOut)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, void*);
@@ -179,7 +369,18 @@ namespace RE
 			func(this, a_bodyId, a_aabbOut);
 		}
 
+		// =====================================================================
 		// Velocity & Impulse
+		//
+		// For VR controller tracking, use ComputeHardKeyFrame + SetBodyVelocity
+		// every frame instead of SetBodyTransform (avoids solver fighting).
+		//
+		// For throw mechanics, use ApplyBodyImpulseAt on release with the
+		// hand's velocity (multiply by ~5.0 for satisfying throw feel).
+		// =====================================================================
+
+		/// Set a body's linear velocity directly.
+		/// @param a_velocity  Linear velocity in Havok space (units/second)
 		void SetBodyLinearVelocity(hknpBodyId a_bodyId, hkVector4f& a_velocity)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, hkVector4f&);
@@ -187,6 +388,9 @@ namespace RE
 			func(this, a_bodyId, a_velocity);
 		}
 
+		/// Set a body's angular velocity directly.
+		/// Set to {0,0,0,0} to prevent gyroscope spinning while grabbed.
+		/// @param a_velocity  Angular velocity in radians/second
 		void SetBodyAngularVelocity(hknpBodyId a_bodyId, hkVector4f& a_velocity)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, hkVector4f&);
@@ -194,6 +398,8 @@ namespace RE
 			func(this, a_bodyId, a_velocity);
 		}
 
+		/// Set both linear and angular velocity in one call.
+		/// Preferred over calling SetBodyLinearVelocity + SetBodyAngularVelocity separately.
 		void SetBodyVelocity(hknpBodyId a_bodyId, hkVector4f& a_linearVelocity, hkVector4f& a_angularVelocity)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, hkVector4f&, hkVector4f&);
@@ -201,6 +407,8 @@ namespace RE
 			func(this, a_bodyId, a_linearVelocity, a_angularVelocity);
 		}
 
+		/// Get a body's current angular velocity.
+		/// @param a_velocityOut  [out] Angular velocity in radians/second
 		void GetBodyAngularVelocity(hknpBodyId a_bodyId, hkVector4f& a_velocityOut)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, hkVector4f&);
@@ -208,6 +416,9 @@ namespace RE
 			func(this, a_bodyId, a_velocityOut);
 		}
 
+		/// Apply a linear impulse to a body's center of mass.
+		/// Immediately changes the body's velocity: dv = impulse * inverseMass.
+		/// @param a_impulse  Impulse vector in Havok space
 		void ApplyBodyLinearImpulse(hknpBodyId a_bodyId, hkVector4f& a_impulse)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, hkVector4f&);
@@ -215,6 +426,8 @@ namespace RE
 			func(this, a_bodyId, a_impulse);
 		}
 
+		/// Apply an angular impulse (torque impulse) to a body.
+		/// @param a_impulse  Angular impulse in Havok space (radians * mass)
 		void ApplyBodyAngularImpulse(hknpBodyId a_bodyId, hkVector4f& a_impulse)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, hkVector4f&);
@@ -222,6 +435,17 @@ namespace RE
 			func(this, a_bodyId, a_impulse);
 		}
 
+		/// Apply an impulse at a specific world point (creates both linear + angular response).
+		/// This is the key method for throw mechanics — apply hand velocity as impulse at
+		/// the grab point for physically correct throwing.
+		///
+		/// @param a_impulse  Impulse vector in Havok space
+		/// @param a_point    World-space application point in Havok space
+		///
+		/// Example (throw on grip release):
+		///   hkVector4f throwImpulse = handVelocity * 5.0f;  // 5x multiplier feels good
+		///   // Clamp: if (throwImpulse.Length() > 20.0f) throwImpulse = throwImpulse.GetNormalized() * 20.0f;
+		///   world->ApplyBodyImpulseAt(bodyId, throwImpulse, grabPoint);
 		void ApplyBodyImpulseAt(hknpBodyId a_bodyId, hkVector4f& a_impulse, hkVector4f& a_point)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, hkVector4f&, hkVector4f&);
@@ -229,6 +453,26 @@ namespace RE
 			func(this, a_bodyId, a_impulse, a_point);
 		}
 
+		/// Compute velocity needed to move a keyframed body to a target pose.
+		/// This is THE method for smooth VR controller tracking — call it every frame
+		/// with the VR controller's target position/rotation, then feed the outputs
+		/// into SetBodyVelocity.
+		///
+		/// @param a_bodyId       Keyframed body to track
+		/// @param a_targetPos    Target position (float[4], Havok space)
+		/// @param a_targetRot    Target rotation (float[4], quaternion xyzw)
+		/// @param a_invDeltaTime 1.0 / deltaTime (higher = snappier tracking)
+		/// @param a_linVelOut    [out] Computed linear velocity (float[4])
+		/// @param a_angVelOut    [out] Computed angular velocity (float[4])
+		///
+		/// Example (VR hand tracking):
+		///   float targetPos[4] = { handX * kHavokScale, handY * kHavokScale, handZ * kHavokScale, 0 };
+		///   float targetRot[4] = { qx, qy, qz, qw };
+		///   float linVel[4], angVel[4];
+		///   world->ComputeHardKeyFrame(handBodyId, targetPos, targetRot, 1.0f/dt, linVel, angVel);
+		///   hkVector4f lv(linVel[0], linVel[1], linVel[2]);
+		///   hkVector4f av(angVel[0], angVel[1], angVel[2]);
+		///   world->SetBodyVelocity(handBodyId, lv, av);
 		void ComputeHardKeyFrame(hknpBodyId a_bodyId, float* a_targetPos, float* a_targetRot, float a_invDeltaTime, float* a_linVelOut, float* a_angVelOut)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId, float*, float*, float, float*, float*);
@@ -236,7 +480,13 @@ namespace RE
 			func(this, a_bodyId, a_targetPos, a_targetRot, a_invDeltaTime, a_linVelOut, a_angVelOut);
 		}
 
+		// =====================================================================
 		// Activation
+		// =====================================================================
+
+		/// Wake up a sleeping body so it participates in simulation.
+		/// Bodies automatically go to sleep when they stop moving.
+		/// Call this before applying impulses to a potentially sleeping body.
 		void ActivateBody(hknpBodyId a_bodyId)
 		{
 			typedef void func_t(hknpWorld*, hknpBodyId);
@@ -244,14 +494,28 @@ namespace RE
 			func(this, a_bodyId);
 		}
 
+		// =====================================================================
 		// Constraints
-		std::uint32_t CreateConstraint(hknpConstraintCinfo& a_cinfo)
+		//
+		// Constraints connect two bodies (e.g., hinges, ball-sockets, 6-DOF).
+		// Heisenberg uses 6-DOF constraints for grab mechanics as an alternative
+		// to velocity-driven tracking.
+		// =====================================================================
+
+		/// Create a constraint between two bodies.
+		/// @param a_outId  Output: receives the constraint ID (0xFFFFFFFF on failure)
+		/// @param a_cinfo  Constraint creation info (type, bodies, limits, etc.)
+		///
+		/// NOTE: Ghidra confirms the actual ABI uses an output pointer for the ID,
+		/// NOT a return value. Signature: uint* createConstraint(this, uint* outId, cinfo*)
+		void CreateConstraint(std::uint32_t* a_outId, hknpConstraintCinfo& a_cinfo)
 		{
-			typedef std::uint32_t func_t(hknpWorld*, hknpConstraintCinfo&);
-			static REL::Relocation<func_t> func{ REL::ID(441087) };
-			return func(this, a_cinfo);
+			static REL::Relocation<std::uintptr_t> addr{ REL::ID(441087) };
+			auto fn = reinterpret_cast<std::uint32_t*(*)(hknpWorld*, std::uint32_t*, hknpConstraintCinfo*)>(addr.address());
+			fn(this, a_outId, &a_cinfo);
 		}
 
+		/// Destroy one or more constraints, freeing their slots.
 		void DestroyConstraints(std::uint32_t* a_constraintIds, std::int32_t a_count)
 		{
 			typedef void func_t(hknpWorld*, std::uint32_t*, std::int32_t);
@@ -259,6 +523,7 @@ namespace RE
 			func(this, a_constraintIds, a_count);
 		}
 
+		/// Temporarily disable a constraint (bodies behave as if unconnected).
 		void DisableConstraint(std::uint32_t a_constraintId)
 		{
 			typedef void func_t(hknpWorld*, std::uint32_t);
@@ -266,6 +531,7 @@ namespace RE
 			func(this, a_constraintId);
 		}
 
+		/// Re-enable a previously disabled constraint.
 		void EnableConstraint(std::uint32_t a_constraintId, std::int32_t a_activationMode = 0)
 		{
 			typedef void func_t(hknpWorld*, std::uint32_t, std::int32_t);
@@ -273,7 +539,21 @@ namespace RE
 			func(this, a_constraintId, a_activationMode);
 		}
 
+		// =====================================================================
 		// Events
+		//
+		// Subscribe to physics events via signals. The event dispatcher lives at
+		// world+0x648. Use hkSignal2::subscribe to register callbacks:
+		//   - GlobalSlot: REL::ID(277607)
+		//   - MemberSlot: REL::ID(427291)
+		//
+		// Contact modifier flag: 0x20000 — set via hknpModifierManager::addModifier
+		// REL::ID(1455691) to enable contact callbacks for specific bodies.
+		// =====================================================================
+
+		/// Get the event signal for a given event type (world-wide).
+		/// @param a_eventType  One of hknpEventType::Enum values
+		/// @return Signal pointer to subscribe to (use hkSignal2::subscribe)
 		void* GetEventSignal(hknpEventType::Enum a_eventType)
 		{
 			typedef void* func_t(hknpWorld*, std::int16_t);
@@ -281,6 +561,8 @@ namespace RE
 			return func(this, static_cast<std::int16_t>(a_eventType));
 		}
 
+		/// Get the event signal for a specific body (per-body filtering).
+		/// Only fires for events involving the specified body.
 		void* GetEventSignalForBody(hknpEventType::Enum a_eventType, hknpBodyId a_bodyId)
 		{
 			typedef void* func_t(hknpWorld*, std::int32_t, std::uint32_t);
@@ -288,7 +570,14 @@ namespace RE
 			return func(this, static_cast<std::int32_t>(a_eventType), a_bodyId.value);
 		}
 
+		// =====================================================================
 		// Simulation
+		// =====================================================================
+
+		/// Run collision detection for one step.
+		/// @param a_input      Step parameters (time, gravity, etc.)
+		/// @param a_taskQueue  Thread pool task queue (nullptr for single-threaded)
+		/// @param a_solverData [in/out] Solver data from previous step
 		void StepCollide(hknpStepInput& a_input, void* a_taskQueue, void*& a_solverData)
 		{
 			typedef void func_t(hknpWorld*, hknpStepInput&, void*, void*&);
@@ -296,6 +585,8 @@ namespace RE
 			func(this, a_input, a_taskQueue, a_solverData);
 		}
 
+		/// Shift the broadphase origin (used during cell transitions to prevent
+		/// floating point precision issues far from origin).
 		void ShiftBroadPhase(hkVector4f& a_offset, hkVector4f& a_offset2, void* a_bodyIdArray)
 		{
 			typedef void func_t(hknpWorld*, hkVector4f&, hkVector4f&, void*);
@@ -303,13 +594,58 @@ namespace RE
 			func(this, a_offset, a_offset2, a_bodyIdArray);
 		}
 
-		// Key offsets (use reinterpret_cast from 'this' to access):
-		// +0x20  = body array pointer (hknpBody*, stride 0x90)
-		// +0xE0  = motion array pointer (stride 0x80)
-		// +0x128 = constraint array pointer (stride 0x38)
-		// +0x178 = collision query dispatcher
-		// +0x5C8 = simulation island manager
-		// +0x648 = event dispatcher (hknpEventDispatcher*)
-		// +0x690 = read/write lock (critical section)
+		// =====================================================================
+		// Direct Memory Access Helpers
+		//
+		// These provide type-safe access to the world's internal arrays.
+		// Prefer these over raw pointer arithmetic.
+		// =====================================================================
+
+		/// Get the body array pointer (indexed by hknpBodyId::value).
+		/// Each body is 0x90 bytes. See hknpBody for the struct layout.
+		hknpBody* GetBodyArray() const
+		{
+			return *reinterpret_cast<hknpBody* const*>(
+				reinterpret_cast<std::uintptr_t>(this) + 0x20);
+		}
+
+		/// Get a specific body by ID.
+		/// No bounds checking — caller must ensure bodyId is valid.
+		hknpBody& GetBody(hknpBodyId a_bodyId) const
+		{
+			return GetBodyArray()[a_bodyId.value];
+		}
+
+		/// Get the raw motion array pointer.
+		/// Index with body.motionIndex * sizeof(hknpMotion).
+		/// Motion index 0 is the shared static motion.
+		hknpMotion* GetMotionArray() const
+		{
+			return *reinterpret_cast<hknpMotion* const*>(
+				reinterpret_cast<std::uintptr_t>(this) + 0xE0);
+		}
+
+		/// Get the motion for a specific body.
+		/// Returns nullptr if the body has an invalid motionIndex.
+		hknpMotion* GetBodyMotion(hknpBodyId a_bodyId) const
+		{
+			auto& body = GetBody(a_bodyId);
+			if (body.motionIndex > 4096) {  // bounds check — garbage motionIndex seen in practice
+				return nullptr;
+			}
+			return &GetMotionArray()[body.motionIndex];
+		}
+
+		/// Get the world-space position of a body (from its motion).
+		/// Returns the position in Havok space. Multiply by 70.0 for game units.
+		/// Returns zero vector if the body has an invalid motion.
+		hkVector4f GetBodyPosition(hknpBodyId a_bodyId) const
+		{
+			auto* motion = GetBodyMotion(a_bodyId);
+			if (!motion) {
+				return hkVector4f(0, 0, 0, 0);
+			}
+			return motion->position;
+		}
 	};
 }
