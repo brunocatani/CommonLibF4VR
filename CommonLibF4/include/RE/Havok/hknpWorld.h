@@ -299,6 +299,19 @@ namespace RE
 			return func(this);
 		}
 
+		/// Attach bodies to the broadphase so they participate in collision detection.
+		/// MUST be called after CreateBody + CommitAddBodies for bodies to actually collide.
+		/// Without this, bodies exist in the body array but the broadphase never checks them.
+		///
+		/// @param a_bodyIds   Array of body IDs to attach
+		/// @param a_count     Number of bodies
+		void AttachBodies(const hknpBodyId* a_bodyIds, int a_count)
+		{
+			using func_t = decltype(&hknpWorld::AttachBodies);
+			static REL::Relocation<func_t> func{ REL::ID(609545) };
+			return func(this, a_bodyIds, a_count);
+		}
+
 		// =====================================================================
 		// Body Properties
 		//
