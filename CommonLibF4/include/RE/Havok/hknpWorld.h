@@ -595,6 +595,71 @@ namespace RE
 		}
 
 		// =====================================================================
+		// Body Flags & Collision Filter
+		//
+		// Enable/disable body flags (e.g., keep-awake flag 0x8000000 for grab).
+		// Change collision filter info to switch layers at runtime (e.g., switch
+		// grabbed objects to BIPED_NO_CC layer to avoid character controller bumping).
+		// =====================================================================
+
+		/// Enable flag bits on a body.
+		/// The most common flag is 0x8000000 (keep-awake), used during grab to prevent
+		/// the body from going to sleep while held.
+		///
+		/// @param a_bodyId            Target body
+		/// @param a_flags             Flag bits to enable (OR'd into body flags at body+0x40)
+		/// @param a_rebuildCachesMode 0 = don't rebuild, 1 = rebuild collision caches
+		void EnableBodyFlags(hknpBodyId a_bodyId, std::uint32_t a_flags, std::int32_t a_rebuildCachesMode = 1)
+		{
+			typedef void func_t(hknpWorld*, hknpBodyId, std::uint32_t, std::int32_t);
+			static REL::Relocation<func_t> func{ REL::ID(987833) };
+			func(this, a_bodyId, a_flags, a_rebuildCachesMode);
+		}
+
+		/// Disable (clear) flag bits on a body.
+		///
+		/// @param a_bodyId            Target body
+		/// @param a_flags             Flag bits to clear
+		/// @param a_rebuildCachesMode 0 = don't rebuild, 1 = rebuild collision caches
+		void DisableBodyFlags(hknpBodyId a_bodyId, std::uint32_t a_flags, std::int32_t a_rebuildCachesMode = 1)
+		{
+			typedef void func_t(hknpWorld*, hknpBodyId, std::uint32_t, std::int32_t);
+			static REL::Relocation<func_t> func{ REL::ID(1506647) };
+			func(this, a_bodyId, a_flags, a_rebuildCachesMode);
+		}
+
+		/// Change a body's collision filter info at runtime.
+		/// This changes which layers the body collides with.
+		///
+		/// Common use: switch grabbed objects from CLUTTER (4) to BIPED_NO_CC (33)
+		/// to prevent the character controller from bumping them during grab.
+		///
+		/// @param a_bodyId            Target body
+		/// @param a_filterInfo        New filter info (bits 0-6 = layer, bits 7+ = group)
+		/// @param a_rebuildCachesMode 0 = don't rebuild, 1 = rebuild collision caches
+		///
+		/// Example (grab with layer change):
+		///   uint32_t origFilter = collObj->GetCollisionFilterInfo();
+		///   uint32_t newFilter = (origFilter & ~0x7F) | static_cast<uint32_t>(COL_LAYER::kBipedNoCC);
+		///   world->SetBodyCollisionFilterInfo(bodyId, newFilter);
+		///   // On release: world->SetBodyCollisionFilterInfo(bodyId, origFilter);
+		void SetBodyCollisionFilterInfo(hknpBodyId a_bodyId, std::uint32_t a_filterInfo, std::int32_t a_rebuildCachesMode = 1)
+		{
+			typedef void func_t(hknpWorld*, hknpBodyId, std::uint32_t, std::int32_t);
+			static REL::Relocation<func_t> func{ REL::Offset(0x153AF00) };
+			func(this, a_bodyId, a_filterInfo, a_rebuildCachesMode);
+		}
+
+		/// Rebuild collision caches for a body after changing its properties.
+		/// Call after SetBodyCollisionFilterInfo if rebuildCachesMode was 0.
+		void RebuildBodyCollisionCaches(hknpBodyId a_bodyId)
+		{
+			typedef void func_t(hknpWorld*, hknpBodyId);
+			static REL::Relocation<func_t> func{ REL::ID(135033) };
+			func(this, a_bodyId);
+		}
+
+		// =====================================================================
 		// Direct Memory Access Helpers
 		//
 		// These provide type-safe access to the world's internal arrays.

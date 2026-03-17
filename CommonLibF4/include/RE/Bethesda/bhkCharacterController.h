@@ -19,7 +19,61 @@
 
 namespace RE
 {
-	enum class COL_LAYER;
+	/// COL_LAYER — Collision layer enum (47 layers).
+	/// Extracted from layer name table at VR 0x1438af760.
+	/// Used in CFilter::filter (bits 0-6 = layer, bits 7+ = group/subgroup).
+	///
+	/// To extract layer from filterInfo: `COL_LAYER layer = static_cast<COL_LAYER>(filterInfo & 0x7F);`
+	/// To set layer in filterInfo: `filterInfo = (filterInfo & ~0x7F) | static_cast<uint32_t>(layer);`
+	enum class COL_LAYER : std::uint32_t
+	{
+		kUnidentified = 0,
+		kStatic = 1,
+		kAnimStatic = 2,
+		kTransparent = 3,
+		kClutter = 4,            ///< Grabbable physics objects
+		kWeapon = 5,
+		kProjectile = 6,
+		kSpell = 7,
+		kBiped = 8,              ///< Ragdoll bones
+		kTrees = 9,
+		kProps = 10,
+		kWater = 11,
+		kTrigger = 12,
+		kTerrain = 13,
+		kNonCollidable = 14,     ///< Special: tuned spring params for grabbed objects
+		kCloudTrap = 15,
+		kGround = 16,
+		kPortal = 17,
+		kDebrisSmall = 18,
+		kDebrisLarge = 19,
+		kAcousticSpace = 20,
+		kActorZone = 21,
+		kProjectileZone = 22,
+		kGasTrap = 23,
+		kShellCasing = 24,
+		kTransparentSmall = 25,
+		kInvisibleWall = 26,
+		kTransparentSmallAnim = 27,
+		kClutterLarge = 29,      ///< Large grabbable objects
+		kCharController = 30,    ///< Player/NPC character controller capsule
+		kStairHelper = 31,
+		kDeadBip = 32,           ///< Dead ragdoll bones
+		kBipedNoCC = 33,         ///< Biped that does NOT collide with CharController — use for grabbed objects
+		kAvoidBox = 34,
+		kCollisionBox = 35,
+		kCameraSphere = 36,
+		kDoorDetection = 37,
+		kConeProjectile = 38,
+		kCameraPick = 39,
+		kItemPick = 40,
+		kLineOfSight = 41,
+		kPathPick = 42,
+		kUnused0 = 43,
+		kUnused1 = 44,
+		kSpellExplosion = 45,
+		kDroppingPick = 46,
+	};
 	enum class SHAPE_TYPES;
 
 	class bhkCharacterControllerCinfo;
