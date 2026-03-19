@@ -8,11 +8,17 @@
 //
 // Usage:
 //   RE::hknpAllHitsCollector collector;
-//   world->CastRay(query, &collector);
-//   for (int i = 0; i < collector.GetNumHits(); i++) {
-//       const auto& hit = collector.GetHits()[i];
+//   world->QueryAabb(&query, &collector);
+//   for (int i = 0; i < collector.hits._size; i++) {
+//       const auto& hit = collector.hits._data[i];
 //       // hit.fraction, hit.hitBodyInfo.m_bodyId, hit.position, hit.normal
 //   }
+//
+// IMPORTANT: Access the inline hkInplaceArray members directly (hits._size,
+// hits._data) instead of using the virtual GetNumHits()/GetHits() methods.
+// The virtual functions are declared as overrides in this header but have no
+// compiled implementations in the game binary — calling them causes unresolved
+// external linker errors. The declarations are kept here for vtable completeness.
 
 #include "RE/Havok/hkArray.h"
 #include "RE/Havok/hknpCollisionQueryCollector.h"

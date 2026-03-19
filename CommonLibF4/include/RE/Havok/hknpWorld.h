@@ -7,14 +7,22 @@
 // Bethesda wraps it in bhkWorld (BSHavok.h), but many operations require
 // direct access to the underlying hknpWorld.
 //
-// Thread safety:
-//   The world has a read/write lock at offset +0x690. Bethesda code acquires
-//   read locks before queries and write locks before mutations. For raycasts
-//   via bhkWorld::PickObject, the lock is taken internally. For direct
-//   hknpWorld calls, you may need to handle locking yourself.
+// Thread safety (Ghidra confirmed 2026-03-19):
+//   The world has a read/write lock at offset +0x690 (hknpThreadSafetyCheck).
+//   Structure at +0x690:
+//     +0x00: uint32  state (reader count in bits 0-4, writer thread ID in bits 8-31)
+//     +0x08: CRITICAL_SECTION (Windows critical section, ~40 bytes)
+//     +0x30: byte    enabled flag
 //
-//   CRASH WARNING: bhkPickData::PickObject will crash without the world
-//   read lock held. Use bhkWorld::PickObject instead (handles locking).
+//   IMPORTANT: All collision query functions (CastRay, CastShape, QueryAabb,
+//   GetClosestPoints) acquire their own read lock internally. Callers do NOT
+//   need to manage locking for these functions.
+//
+//   Lock acquire: FUN_1415388f0(world+0x690) — EnterCriticalSection, increment reader count
+//   Lock release: FUN_141538a30(world+0x690) — EnterCriticalSection, decrement reader count
+//
+//   bhkWorld::PickObject also handles its own locking (at bhkWorld+0x6D8,
+//   separate from hknpWorld+0x690).
 //
 // Getting an hknpWorld pointer:
 //   // Via bhkWorld (Bethesda wrapper):
@@ -39,7 +47,9 @@
 // All REL::IDs verified against fo4_database.csv for Fallout 4 VR.
 // Ghidra RE on Fallout4VR.exe.unpacked.exe.
 
+#include "RE/Havok/hkArray.h"
 #include "RE/Havok/hkVector4.h"
+#include "RE/Havok/hknpAabbQuery.h"
 #include "RE/Havok/hknpBody.h"
 #include "RE/Havok/hknpBodyId.h"
 #include "RE/Havok/hknpBodyCinfo.h"
@@ -140,11 +150,14 @@ namespace RE
 
 		/// Cast a ray through the world, collecting hits into the collector.
 		///
+		/// Self-locking: acquires read lock at world+0x690 internally.
+		/// Callers do NOT need to manage locking.
+		///
 		/// @param a_query     Raycast query struct (start point, direction, max distance)
 		/// @param a_collector Receives hit results (use hknpClosestHitCollector or hknpAllHitsCollector)
 		///
-		/// Note: For most gameplay raycasts, prefer bhkWorld::PickObject() which handles
-		/// world locking and returns bhkPickData with NiAVObject resolution.
+		/// Note: For most gameplay raycasts, prefer bhkWorld::PickObject() which
+		/// also handles NiAVObject resolution automatically.
 		void CastRay(void* a_query, hknpCollisionQueryCollector* a_collector)
 		{
 			using func_t = decltype(&hknpWorld::CastRay);
@@ -155,7 +168,14 @@ namespace RE
 		/// Sweep a shape through the world (linear cast / shape cast).
 		/// This is the Havok 2014 equivalent of "linearCast" from older Havok versions.
 		///
-		/// @param a_query              Shape cast query (shape + path)
+		/// Self-locking: acquires read lock at world+0x690 internally.
+		/// Callers do NOT need to manage locking.
+		///
+		/// NOTE: The hknpShapeCastQuery struct is ~0x78 bytes with complex precomputed
+		/// inverse direction fields (rcpps + movmskps). Consider using QueryAabb +
+		/// post-filter as a simpler alternative for spatial proximity detection.
+		///
+		/// @param a_query              Shape cast query (~0x78 bytes, partially RE'd)
 		/// @param a_queryShapeInfo     Shape info for the query shape
 		/// @param a_collector          Receives hit results
 		/// @param a_startPointCollector Optional: collects hits at the start position (can be nullptr)
@@ -168,6 +188,9 @@ namespace RE
 
 		/// Find the closest points between a shape and the world geometry.
 		///
+		/// Self-locking: acquires read lock at world+0x690 internally.
+		/// Callers do NOT need to manage locking.
+		///
 		/// @param a_query     Point query struct
 		/// @param a_transform Transform for the query shape
 		/// @param a_collector Receives closest point results
@@ -178,16 +201,47 @@ namespace RE
 			return func(this, a_query, a_transform, a_collector);
 		}
 
-		/// Query all bodies whose AABBs overlap the given AABB.
-		/// Fast broadphase-only query — no narrowphase collision test.
+		/// Query all bodies whose shapes overlap the given AABB.
 		///
-		/// @param a_query     AABB query (min/max bounds)
-		/// @param a_collector Receives overlapping body IDs
-		void QueryAabb(void* a_query, hknpCollisionQueryCollector* a_collector)
+		/// Performs BOTH broadphase tree traversal AND narrowphase shape geometry
+		/// tests. This is NOT a coarse AABB-only check — it tests the actual shape
+		/// of each candidate body against the query AABB. Results are filtered by
+		/// collisionFilterInfo.
+		///
+		/// Self-locking: acquires read lock at world+0x690 internally.
+		/// Callers do NOT need to manage locking.
+		///
+		/// Internal behavior (Ghidra confirmed):
+		///   1. Acquires read lock at world+0x690
+		///   2. Converts AABB to broadphase quantized shorts
+		///   3. Broadphase tree query → candidate body ID array
+		///   4. For each candidate: collision filter check + narrowphase overlap test
+		///   5. Releases read lock, frees candidates
+		///
+		/// @param a_query     hknpAabbQuery struct (0x40 bytes, see hknpAabbQuery.h)
+		/// @param a_collector Receives hits (use hknpAllHitsCollector for multiple results)
+		///
+		/// WARNING: Use collector.hits._size / collector.hits._data to access results.
+		/// The virtual GetNumHits()/GetHits() methods cause linker errors when called
+		/// directly — they are declared but have no compiled implementations in the game binary.
+		void QueryAabb(hknpAabbQuery* a_query, hknpCollisionQueryCollector* a_collector)
 		{
-			using func_t = decltype(&hknpWorld::QueryAabb);
+			typedef void func_t(hknpWorld*, hknpAabbQuery*, hknpCollisionQueryCollector*);
 			static REL::Relocation<func_t> func{ REL::ID(990501) };
-			return func(this, a_query, a_collector);
+			func(this, a_query, a_collector);
+		}
+
+		/// Query all bodies whose shapes overlap the given AABB (array output overload).
+		///
+		/// Same as above but returns results in an hkArray instead of a collector.
+		///
+		/// @param a_query     hknpAabbQuery struct (0x40 bytes)
+		/// @param a_hitsOut   Array that receives body IDs of overlapping bodies
+		void QueryAabb(hknpAabbQuery* a_query, hkArray<hknpBodyId>* a_hitsOut)
+		{
+			typedef void func_t(hknpWorld*, hknpAabbQuery*, hkArray<hknpBodyId>*);
+			static REL::Relocation<func_t> func{ REL::ID(1536729) };
+			func(this, a_query, a_hitsOut);
 		}
 
 		// =====================================================================
@@ -323,9 +377,19 @@ namespace RE
 
 		/// Set a body's world transform (position + rotation).
 		///
-		/// WARNING: For keyframed/grabbed objects, using SetBodyTransform every frame
+		/// WARNING 1: For keyframed/grabbed objects, using SetBodyTransform every frame
 		/// fights the Havok solver and causes visible stutter. Use velocity-driven
 		/// movement instead (ComputeHardKeyFrame + SetBodyVelocity).
+		///
+		/// WARNING 2 (Ghidra confirmed 2026-03-19): SetBodyTransform has a known COM
+		/// offset drift issue. Internally, updateMotionAndAttachedBodies computes:
+		///   motion_pos = rotation * (body[3], body[7], body[0xB]) + translation
+		/// The W components (body[3/7/11]) contain AABB initialization data and are
+		/// preserved across SetBodyTransform calls. This causes a rotation-dependent
+		/// position offset when the body has a non-zero offset from its creation origin.
+		/// Bodies at their creation position (zero offset) work correctly in all directions.
+		/// For bodies with position offsets, the collider will drift depending on facing
+		/// direction (e.g., correct when facing West, drifts when facing South).
 		///
 		/// @param a_bodyId              Target body
 		/// @param a_transform           New world transform (Havok space)

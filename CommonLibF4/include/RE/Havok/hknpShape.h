@@ -60,7 +60,7 @@ namespace RE
 
 	struct hkDiagonalizedMassProperties;
 	struct hkGeometry;
-	struct hknpAabbQuery;
+	struct hknpAabbQuery;  // Full definition in RE/Havok/hknpAabbQuery.h
 	struct hknpCdBody;
 	struct hknpCollisionQueryContext;
 	struct hknpPointQuery;

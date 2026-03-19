@@ -16,12 +16,12 @@
 //       }
 //
 //   hknpAllHitsCollector — collects up to 10 hits (0x3F0 bytes, stack-allocated)
-//     Use for: penetration detection, multi-target queries
-//     Usage:
+//     Use for: penetration detection, multi-target queries, QueryAabb
+//     Usage (access inline array directly — virtual methods cause linker errors):
 //       RE::hknpAllHitsCollector collector;
-//       world->CastRay(query, &collector);
-//       for (int i = 0; i < collector.GetNumHits(); i++) {
-//           auto& hit = collector.GetHits()[i];
+//       world->QueryAabb(&query, &collector);
+//       for (int i = 0; i < collector.hits._size; i++) {
+//           auto& hit = collector.hits._data[i];
 //       }
 //
 // For gameplay raycasts, prefer bhkWorld::PickObject(bhkPickData&) which handles

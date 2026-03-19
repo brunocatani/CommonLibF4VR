@@ -261,6 +261,7 @@ set(SOURCES
 	include/RE/Havok/hkReferencedObject.h
 	include/RE/Havok/hkSimdFloat.h
 	include/RE/Havok/hkVector4.h
+	include/RE/Havok/hknpAabbQuery.h
 	include/RE/Havok/hknpAllHitsCollector.h
 	include/RE/Havok/hknpBody.h
 	include/RE/Havok/hknpBodyCinfo.h
