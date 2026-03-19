@@ -7,32 +7,33 @@
 //
 // Key relationships:
 //   hknpBody -> hknpMotion  (via motionIndex)
-//   hknpBody -> hknpShape   (via shape pointer)
-//   hknpBody -> NiAVObject  (via userData, when valid — see validation notes below)
+//   hknpBody -> hknpShape   (via shape pointer at +0x48)
+//   hknpBody -> NiAVObject  (via userData at +0x88, when valid — see validation notes below)
 //
 // ┌─────────────────────────────────────────────────────────────────────────┐
 // │  IMPORTANT: userData validation                                        │
-// │  body.userData is NOT always a TESObjectREFR* or even a valid pointer. │
+// │  body.userData (+0x88) is NOT always a TESObjectREFR* or valid pointer.│
 // │  FOIslandActivationListener dereferences it unconditionally, so if you │
-// │  create bodies, set userData = 0 unless you have a valid pointer.      │
-// │  Before dereferencing: check alignment (% 8 == 0), pointer range       │
+// │  create bodies, set cinfo.userData = 0 unless you have a valid pointer.│
+// │  Before dereferencing: check alignment (% 8 == 0), pointer range      │
 // │  (0x10000..0x7FFFFFFFFFFF), and vtable validity.                       │
 // └─────────────────────────────────────────────────────────────────────────┘
 //
-// Offsets RE'd via Ghidra on Fallout4VR.exe.unpacked.exe and confirmed in
-// HIGGS-FO4VR contact detection (body scan of ~2047 bodies per cell).
+// STRUCT LAYOUT VERIFIED via Ghidra decompilation (2026-03-17):
+//   - hknpBody__initFromCinfo (0x1415616f0): maps cinfo fields to body offsets
+//   - hknpWorld__enableBodyFlags (0x14153c090): writes flags at body+0x40
+//   - hknpBSWorld__setBodyCollisionFilterInfo (0x141df5b80→0x14153af00): writes filterInfo at body+0x44
+//   - bhkNPCollisionObject__GetCollisionFilterInfo (0x141e08d60): reads body+0x44
+//
+// Offsets RE'd via Ghidra on Fallout4VR.exe.unpacked.exe and confirmed by
+// cross-referencing multiple functions that read/write body fields.
 //
 // Usage:
-//   // Access body array from hknpWorld
-//   auto* bodyArray = *reinterpret_cast<RE::hknpBody**>(
-//       reinterpret_cast<uintptr_t>(hknpWorld) + 0x20);
-//   RE::hknpBody& body = bodyArray[bodyId.value];
-//
-//   // Read position from motion (NOT from body — body+0x00 is AABB data)
-//   auto* motionArray = *reinterpret_cast<uint8_t**>(
-//       reinterpret_cast<uintptr_t>(hknpWorld) + 0xE0);
-//   float* pos = reinterpret_cast<float*>(motionArray + body.motionIndex * 0x80);
-//   // pos[0]=x, pos[1]=y, pos[2]=z, pos[3]=w (Havok space, scale = 1/70)
+//   auto& body = world->GetBody(bodyId);
+//   uint32_t filter = body.collisionFilterInfo;  // +0x44
+//   uint32_t layer = filter & 0x7F;
+//   auto* shape = body.shape;                     // +0x48
+//   auto* motion = world->GetBodyMotion(bodyId);  // via motionIndex at +0x68
 
 #include "RE/Havok/hknpBodyId.h"
 #include "RE/Havok/hknpMaterialId.h"
@@ -46,72 +47,90 @@ namespace RE
 	/// Memory layout: 0x90 bytes per body (stride confirmed via Ghidra).
 	/// The body array is at hknpWorld+0x20 and indexed directly by hknpBodyId::value.
 	///
-	/// Bodies come in three motion types (controlled by motionPropertiesId):
+	/// Bodies come in three motion types (controlled by motionPropertiesId at +0x72):
 	///   STATIC (0)    — never moves, motionIndex typically 0 (shared static motion)
 	///   DYNAMIC (1)   — simulated by solver, affected by gravity and impulses
 	///   KEYFRAMED (2) — position set externally (e.g., VR controller tracking)
 	///
-	/// To check if a body is dynamic: motionPropertiesId & 0xFF == 1
+	/// To check if a body is dynamic: (motionPropertiesId & 0xFF) == 1
 	/// To check if a body is static:  motionIndex == 0 (shared static motion slot)
 	struct hknpBody
 	{
 	public:
-		// +0x00: AABB min (NOT world position — common mistake!)
-		// The actual world position is stored in the MOTION struct, not here.
-		float aabbMin[4];  // 00 — axis-aligned bounding box minimum (Havok space)
+		// +0x00..+0x3F: AABB and broadphase/transform data
+		// Written by initFromCinfo from cinfo position/orientation.
+		// body+0x00 is NOT the world position — that's in the Motion struct.
 
-		// +0x10: AABB max
-		float aabbMax[4];  // 10 — axis-aligned bounding box maximum (Havok space)
+		float aabbMin[4];             // 00 — broadphase AABB minimum
+		float aabbMax[4];             // 10 — broadphase AABB maximum
 
-		// +0x20: Broadphase handle / internal Havok data
-		std::uint64_t broadphaseId;  // 20
+		std::uint64_t broadphaseId;   // 20 — broadphase handle
+		std::uint8_t pad28[0x18];     // 28 — internal broadphase/transform data
 
-		// +0x28: Shape pointer
-		const hknpShape* shape;  // 28 — collision shape (hknpCapsuleShape, etc.)
+		// +0x40: Body flags (uint32)
+		// Written by enableBodyFlags/disableBodyFlags.
+		// initFromCinfo sets: (cinfo.pad18 & 0xFFFFFFF0) | 0x400
+		// initializeDynamicBody adds: | 0x2
+		// Key bits:
+		//   0x00000002 = initialized as dynamic (set by initializeDynamicBody)
+		//   0x00000400 = committed to world
+		//   0x00020000 = contact modifier enabled (generates contact events)
+		//   0x08000000 = keep-awake (prevents deactivation during grab)
+		std::uint32_t flags;          // 40
 
-		// +0x30: Collision filter info (layer bits, group, etc.)
-		std::uint32_t collisionFilterInfo;  // 30
+		// +0x44: Collision filter info (uint32)
+		// Written by setBodyCollisionFilterInfo, copied from cinfo+0x14.
+		// Bits 0-6:   collision layer (0-46)
+		// Bits 16-31: collision group
+		// Used by bhkCollisionFilter to decide if two bodies can collide.
+		std::uint32_t collisionFilterInfo;  // 44
 
-		// +0x34: Various packed flags
-		std::uint16_t flags;       // 34
-		std::uint16_t flagsHigh;   // 36
+		// +0x48: Shape pointer
+		// The collision shape (hknpCapsuleShape, hknpConvexShape, etc.)
+		// Copied from cinfo.shape. Raw pointer — NOT ref-counted in the body.
+		const hknpShape* shape;       // 48
 
-		// +0x38: Material ID for this body
-		hknpMaterialId materialId;  // 38
+		// +0x50..+0x5F: Internal data (broadphase AABB quantized, set during commit)
+		std::uint8_t pad50[0x10];     // 50
 
-		// +0x3A: Quality ID (affects solver iterations)
-		std::uint8_t qualityId;    // 3A
-		std::uint8_t pad3B;        // 3B
-		std::uint32_t pad3C;       // 3C
-
-		// +0x40: User data — often a TESObjectREFR* but MUST be validated before use.
-		// Set to 0 for custom bodies (hand colliders, etc.) to avoid crashes in
-		// FOIslandActivationListener which dereferences this unconditionally.
-		std::uintptr_t userData;   // 40
-
-		// +0x48..0x67: Internal Havok data (collision caches, etc.)
-		std::uint8_t pad48[0x20];  // 48
+		// +0x60: Body ID (matches the array index, set by initFromCinfo)
+		hknpBodyId bodyId;            // 60
+		std::uint32_t pad64;          // 64
 
 		// +0x68: Motion index — indexes into the motion array (world+0xE0, stride 0x80).
 		// motionIndex == 0 means "shared static motion" (body is static).
 		// IMPORTANT: Must bounds-check (> 4096 likely invalid / garbage).
 		// Compound objects share the same motionId (e.g., bodies 1593-1597 all use motionId=165).
-		std::uint32_t motionIndex;  // 68
+		std::uint32_t motionIndex;    // 68
 
-		// +0x6C: Body ID (matches the array index)
-		hknpBodyId bodyId;          // 6C
+		std::uint32_t pad6C;          // 6C
 
-		// +0x70: More internal data
-		std::uint16_t pad70;        // 70
+		// +0x70: Material ID (uint16) — from cinfo.materialId
+		hknpMaterialId materialId;    // 70
 
 		// +0x72: Motion properties ID — determines physics behavior.
-		// Changes dynamically at runtime (values seen: 259, 515, 770, 1282, etc.)
-		// Lower byte is the preset: 0=STATIC, 1=DYNAMIC, 2=KEYFRAMED
+		// Lower byte is the preset: 0=STATIC, 1=DYNAMIC, 2=KEYFRAMED, 3=FROZEN
+		// Set by initializeDynamicBody from cinfo.motionPropertiesId.
 		// Use (motionPropertiesId & 0xFF) to get the base preset.
-		std::uint16_t motionPropertiesId;  // 72
+		std::uint8_t motionPropertiesId;  // 72
 
-		// +0x74..0x8F: Remaining internal fields
-		std::uint8_t pad74[0x1C];  // 74
+		std::uint8_t pad73[0x0B];     // 73
+
+		// +0x7E: Quality ID — affects solver iteration count.
+		// Set from cinfo.qualityId. 0xFF = default.
+		// KEYFRAMED bodies should use quality 2.
+		std::uint8_t qualityId;       // 7E
+
+		// +0x7F: Shape complexity flag (derived from shape during initFromCinfo)
+		std::uint8_t shapeComplexity; // 7F
+
+		// +0x80..+0x87: Internal data
+		std::uint8_t pad80[0x08];     // 80
+
+		// +0x88: User data — often a TESObjectREFR* but MUST be validated before use.
+		// Set from cinfo.userData. Set to 0 for custom bodies (hand colliders, etc.)
+		// to avoid crashes in FOIslandActivationListener.
+		std::uintptr_t userData;      // 88
 	};
 	static_assert(sizeof(hknpBody) == 0x90);
 

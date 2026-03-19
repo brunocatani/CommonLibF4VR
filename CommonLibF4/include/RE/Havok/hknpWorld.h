@@ -30,7 +30,9 @@
 //   +0xE0  = void*      motion array (stride 0x80, indexed by hknpBody::motionIndex)
 //   +0x128 = void*      constraint array (stride 0x38)
 //   +0x178 = void*      collision query dispatcher
-//   +0x5C8 = void*      simulation island manager
+//   +0x5C8 = hknpMaterialLibrary*          material library (hkRefPtr)
+//   +0x5D0 = hknpMotionPropertiesLibrary*  motion properties library (hkRefPtr)
+//   +0x5D8 = hknpBodyQualityLibrary*       body quality library (hkRefPtr)
 //   +0x648 = void*      event dispatcher (hknpEventDispatcher*)
 //   +0x690 = void*      read/write lock (critical section)
 //
@@ -678,6 +680,50 @@ namespace RE
 		// These provide type-safe access to the world's internal arrays.
 		// Prefer these over raw pointer arithmetic.
 		// =====================================================================
+
+		// =====================================================================
+		// Material Library Access
+		//
+		// The material library lives at world+0x5C8. It's a hkFreeListArray
+		// with stride 0x50 per material. Materials are indexed by materialId
+		// (uint16, stored at body+0x70).
+		//
+		// Key material field offsets (within 0x50 byte struct):
+		//   +0x10 = triggerType (uint8, 0=normal)
+		//   +0x11 = dynamicFriction (quantized byte 0-255)
+		//   +0x12 = staticFriction (hkHalf16)
+		//   +0x28 = restitution (hkHalf16)
+		//   +0x0C = flags (auto-computed, call updateFlags after changes)
+		// =====================================================================
+
+		/// Get the material library pointer.
+		/// The material array base is at *(matLib + 0x28).
+		void* GetMaterialLibrary() const
+		{
+			return *reinterpret_cast<void* const*>(
+				reinterpret_cast<std::uintptr_t>(this) + 0x5C8);
+		}
+
+		/// Get a raw pointer to a material by ID.
+		/// Returns pointer to an 0x50-byte hknpMaterial struct.
+		/// No bounds checking — caller must ensure materialId is valid.
+		void* GetMaterial(std::uint16_t a_materialId) const
+		{
+			auto* matLib = GetMaterialLibrary();
+			if (!matLib) return nullptr;
+			auto arrayBase = *reinterpret_cast<std::uintptr_t*>(
+				reinterpret_cast<std::uintptr_t>(matLib) + 0x28);
+			return reinterpret_cast<void*>(arrayBase + a_materialId * 0x50);
+		}
+
+		/// Get the material count (number of allocated material slots).
+		std::int32_t GetMaterialCount() const
+		{
+			auto* matLib = GetMaterialLibrary();
+			if (!matLib) return 0;
+			return *reinterpret_cast<std::int32_t*>(
+				reinterpret_cast<std::uintptr_t>(matLib) + 0x30);
+		}
 
 		/// Get the body array pointer (indexed by hknpBodyId::value).
 		/// Each body is 0x90 bytes. See hknpBody for the struct layout.
