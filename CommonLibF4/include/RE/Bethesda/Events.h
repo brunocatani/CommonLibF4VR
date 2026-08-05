@@ -733,9 +733,15 @@ namespace RE
 		float                                                           criticalDamageMult;      // C0
 		REX::EnumSet<Flag, std::uint32_t>                               flags;                   // C4
 		BGSEquipIndex                                                   equipIndex;              // C8
-		std::uint32_t                                                   material;                // D0
-		REX::EnumSet<BGSBodyPartDefs::LIMB_ENUM, std::uint32_t>         damageLimb;              // D4
+		std::uint32_t                                                   material;                // CC
+		REX::EnumSet<BGSBodyPartDefs::LIMB_ENUM, std::uint32_t>         damageLimb;              // D0
+		std::uint32_t                                                   padD4;                   // D4
+		void*                                                           projectileContext;       // D8
 	};
+	static_assert(offsetof(HitData, equipIndex) == 0xC8);
+	static_assert(offsetof(HitData, material) == 0xCC);
+	static_assert(offsetof(HitData, damageLimb) == 0xD0);
+	static_assert(offsetof(HitData, projectileContext) == 0xD8);
 	static_assert(sizeof(HitData) == 0xE0);
 
 	class TESHitEvent
