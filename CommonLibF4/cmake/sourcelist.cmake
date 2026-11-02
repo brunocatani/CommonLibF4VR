@@ -55,6 +55,7 @@ set(SOURCES
 	include/RE/Bethesda/BSInputEventReceiver.h
 	include/RE/Bethesda/BSInputEventSingleUser.h
 	include/RE/Bethesda/BSInputEventUser.h
+	include/RE/Bethesda/BSLight.h
 	include/RE/Bethesda/BSLock.h
 	include/RE/Bethesda/BSMTAManager.h
 	include/RE/Bethesda/BSMemStorage.h
@@ -299,12 +300,14 @@ set(SOURCES
 	include/RE/NetImmerse/NiFile.h
 	include/RE/NetImmerse/NiFlags.h
 	include/RE/NetImmerse/NiFrustum.h
+	include/RE/NetImmerse/NiLight.h
 	include/RE/NetImmerse/NiMatrix3.h
 	include/RE/NetImmerse/NiMemStream.h
 	include/RE/NetImmerse/NiNode.h
 	include/RE/NetImmerse/NiObject.h
 	include/RE/NetImmerse/NiObjectNET.h
 	include/RE/NetImmerse/NiPoint.h
+	include/RE/NetImmerse/NiPointLight.h
 	include/RE/NetImmerse/NiProperty.h
 	include/RE/NetImmerse/NiQuaternion.h
 	include/RE/NetImmerse/NiRTTI.h
@@ -464,6 +467,7 @@ set(SOURCES
 	src/REL/IAT.cpp
 	src/REL/IDDB.cpp
 	src/REL/Module.cpp
+	src/REL/NoGame.cpp
 	src/REL/Relocation.cpp
 	src/REL/Version.cpp
 	src/REX/W32.cpp
