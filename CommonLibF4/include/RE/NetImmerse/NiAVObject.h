@@ -23,6 +23,28 @@ namespace RE
 		static constexpr auto VTABLE{ VTABLE::NiAVObject };
 		static constexpr auto Ni_RTTI{ Ni_RTTI::NiAVObject };
 
+		// FO4VR's vtable has three more entries than flat Fallout 4 before GetObjectByName, so
+		// the slot numbers in the declarations below are flat ones. These are the FO4VR slots,
+		// for REL::guarded_read_vfunc or REL::RelocateVirtual.
+		static constexpr std::size_t VR_GetObjectByNameSlot{ 0x31 };
+		static constexpr std::size_t VR_UpdateWorldDataSlot{ 0x37 };
+
+		// Address Library IDs of NiAVObject's own implementations. Compare one with an
+		// object's vtable entry to learn whether the object keeps the base behaviour.
+		// FO4VR: GetObjectByName 0x141C233F0, UpdateWorldData 0x141C23740.
+		static constexpr REL::ID GetObjectByNameID{ 1330146 };
+		static constexpr REL::ID UpdateWorldDataID{ 850280 };
+
+		/// True when FO4VR's NiAVObject GetObjectByName and UpdateWorldData start with the
+		/// expected code.
+		[[nodiscard]] static bool VRCodeMatches()
+		{
+			static constexpr std::uint8_t getObjectByName[]{ 0x48, 0x8B, 0x12, 0x33, 0xC0, 0x48 };
+			static constexpr std::uint8_t updateWorldData[]{ 0x40, 0x53, 0x48, 0x83, 0xEC, 0x60 };
+			return REL::code_matches(GetObjectByNameID.address(), getObjectByName) &&
+			       REL::code_matches(UpdateWorldDataID.address(), updateWorldData);
+		}
+
 		NiAVObject();
 		virtual ~NiAVObject();  // NOLINT(modernize-use-override) 00
 

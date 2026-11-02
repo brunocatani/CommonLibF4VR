@@ -15,6 +15,17 @@ namespace RE
 		static constexpr auto VTABLE{ VTABLE::NiNode };
 		static constexpr auto Ni_RTTI{ Ni_RTTI::NiNode };
 
+		// Address Library ID of NiNode's GetObjectByName (FO4VR 0x141C18500), which searches
+		// the children. See NiAVObject::VR_GetObjectByNameSlot.
+		static constexpr REL::ID GetObjectByNameID{ 1068190 };
+
+		/// True when FO4VR's NiNode GetObjectByName starts with the expected code.
+		[[nodiscard]] static bool VRCodeMatches()
+		{
+			static constexpr std::uint8_t code[]{ 0x48, 0x89, 0x74, 0x24, 0x10, 0x57 };
+			return REL::code_matches(GetObjectByNameID.address(), code);
+		}
+
 		// NOLINTNEXTLINE(modernize-use-equals-default)
 		NiNode() :
 			NiNode(0)
